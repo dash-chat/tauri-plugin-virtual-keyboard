@@ -92,7 +92,7 @@ class VirtualKeyboardPlugin(private val activity: Activity): Plugin(activity) {
                 // Animated changes are reported by the willShow/willHide pair
                 // below; this covers IMEs/settings where no animation runs.
                 if (!animating) {
-                    emit("change", "{\"height\":${ime.bottom / density}}")
+                    emit("change", "{\"height\":${imeOverlap(rootView, ime.bottom) / density}}")
                 }
 
                 windowInsets
@@ -148,8 +148,18 @@ class VirtualKeyboardPlugin(private val activity: Activity): Plugin(activity) {
     }
 
     private fun imeHeight(rootView: View): Int =
-        ViewCompat.getRootWindowInsets(rootView)
-            ?.getInsets(WindowInsetsCompat.Type.ime())?.bottom ?: 0
+        imeOverlap(rootView, ViewCompat.getRootWindowInsets(rootView)
+            ?.getInsets(WindowInsetsCompat.Type.ime())?.bottom ?: 0)
+
+    // The page measures the keyboard from the webview's bottom edge, which the
+    // host app may lift above the navigation bar by padding the webview's parent.
+    private fun imeOverlap(rootView: View, imeBottom: Int): Int {
+        val webView = webView ?: return imeBottom
+        val location = IntArray(2)
+        webView.getLocationInWindow(location)
+        val gapBelowWebView = rootView.height - (location[1] + webView.height)
+        return maxOf(0, imeBottom - gapBelowWebView)
+    }
 
     @Command
     fun hide(invoke: Invoke) {
