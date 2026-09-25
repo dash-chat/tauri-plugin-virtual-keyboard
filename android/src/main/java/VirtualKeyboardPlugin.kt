@@ -1,7 +1,11 @@
 package org.dashchat.virtualkeyboard
 
 import android.view.View
+import android.view.ViewGroup
+import android.view.ViewTreeObserver
 import android.app.Activity
+import android.app.Application
+import android.os.Bundle
 import app.tauri.annotation.Command
 import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Plugin
@@ -16,6 +20,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 
 @TauriPlugin
 class VirtualKeyboardPlugin(private val activity: Activity): Plugin(activity) {
+    private var currentActivity: Activity = activity
     private var webView: WebView? = null
     private var animating = false
     private var imeVisible = false
@@ -34,7 +39,51 @@ class VirtualKeyboardPlugin(private val activity: Activity): Plugin(activity) {
 
     override fun load(webView: WebView) {
         super.load(webView)
+        attach(activity, webView)
+        attachToRecreatedActivities()
+    }
+
+    // Tauri loads a plugin once per process, but a recreated activity (on the
+    // config changes it doesn't handle itself) gets a new window and webview.
+    private fun attachToRecreatedActivities() {
+        activity.application.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
+            override fun onActivityCreated(created: Activity, savedInstanceState: Bundle?) {
+                if (created.javaClass == activity.javaClass) {
+                    whenWebViewAdded(created) { attach(created, it) }
+                }
+            }
+
+            override fun onActivityStarted(activity: Activity) {}
+            override fun onActivityResumed(activity: Activity) {}
+            override fun onActivityPaused(activity: Activity) {}
+            override fun onActivityStopped(activity: Activity) {}
+            override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
+            override fun onActivityDestroyed(activity: Activity) {}
+        })
+    }
+
+    private fun whenWebViewAdded(activity: Activity, callback: (WebView) -> Unit) {
+        val rootView = activity.window.decorView
+        rootView.viewTreeObserver.addOnGlobalLayoutListener(object : ViewTreeObserver.OnGlobalLayoutListener {
+            override fun onGlobalLayout() {
+                val webView = findWebView(rootView) ?: return
+                rootView.viewTreeObserver.removeOnGlobalLayoutListener(this)
+                callback(webView)
+            }
+        })
+    }
+
+    private fun findWebView(view: View): WebView? {
+        if (view is WebView) return view
+        if (view !is ViewGroup) return null
+        return (0 until view.childCount).firstNotNullOfOrNull { findWebView(view.getChildAt(it)) }
+    }
+
+    private fun attach(activity: Activity, webView: WebView) {
+        currentActivity = activity
         this.webView = webView
+        animating = false
+        imeVisible = false
         val rootView = activity.window.decorView
         val density = activity.resources.displayMetrics.density
 
@@ -163,9 +212,9 @@ class VirtualKeyboardPlugin(private val activity: Activity): Plugin(activity) {
 
     @Command
     fun hide(invoke: Invoke) {
-        activity.runOnUiThread {
+        currentActivity.runOnUiThread {
             webView?.let {
-                WindowInsetsControllerCompat(activity.window, it)
+                WindowInsetsControllerCompat(currentActivity.window, it)
                     .hide(WindowInsetsCompat.Type.ime())
             }
             invoke.resolve()
@@ -174,9 +223,9 @@ class VirtualKeyboardPlugin(private val activity: Activity): Plugin(activity) {
 
     @Command
     fun show(invoke: Invoke) {
-        activity.runOnUiThread {
+        currentActivity.runOnUiThread {
             webView?.let {
-                WindowInsetsControllerCompat(activity.window, it)
+                WindowInsetsControllerCompat(currentActivity.window, it)
                     .show(WindowInsetsCompat.Type.ime())
             }
             invoke.resolve()
